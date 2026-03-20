@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NITEO BMS — Remote Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
+
+  :root {
+    --bg:       #050c14;
+    --bg2:      #0a1628;
+    --bg3:      #0f1f38;
+    --border:   #1a3456;
+    --accent:   #00d4ff;
+    --accent2:  #ff6b35;
+    --green:    #00ff88;
+    --red:      #ff3355;
+    --yellow:   #ffcc00;
+    --dim:      #4a6080;
+    --text:     #c8dff0;
+    --textdim:  #5a7a9a;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Animated grid background */
+  body::before {
+    content:'';
+    position:fixed;
+    inset:0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events:none;
+    z-index:0;
+  }
+
+  /* ── TOP BAR ── */
+  .topbar {
+    position: sticky; top:0; z-index:100;
+    background: rgba(5,12,20,0.95);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    backdrop-filter: blur(12px);
+  }
+  .logo {
+    display:flex; align-items:center; gap:12px;
+  }
+  .logo-icon {
+    width:32px; height:32px;
+    border: 2px solid var(--accent);
+    border-radius:6px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:16px;
+    box-shadow: 0 0 12px rgba(0,212,255,0.3);
+  }
+  .logo-text { font-size:22px; font-weight:700; letter-spacing:3px; color:var(--accent); }
+  .logo-sub  { font-size:11px; color:var(--textdim); letter-spacing:2px; }
+
+  .conn-status {
+    display:flex; align-items:center; gap:8px;
+    font-family:'Share Tech Mono', monospace;
+    font-size:12px;
+  }
+  .conn-dot {
+    width:8px; height:8px; border-radius:50%;
+    background:var(--red);
+    box-shadow: 0 0 8px var(--red);
+    transition: all 0.3s;
+  }
+  .conn-dot.online { background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+  .time-display {
+    font-family:'Share Tech Mono', monospace;
+    font-size:13px;
+    color:var(--accent);
+    letter-spacing:1px;
+  }
+
+  /* ── MAIN LAYOUT ── */
+  .main { position:relative; z-index:1; padding:20px 24px; max-width:1400px; margin:0 auto; }
+
+  /* ── BATTERY HERO ── */
+  .battery-hero {
+    background: linear-gradient(135deg, var(--bg2), var(--bg3));
+    border: 1px solid var(--border);
+    border-radius:16px;
+    padding:24px;
+    margin-bottom:20px;
+    display:grid;
+    grid-template-columns: 1fr auto;
+    gap:24px;
+    align-items:center;
+    position:relative;
+    overflow:hidden;
+  }
+  .battery-hero::before {
+    content:'';
+    position:absolute;
+    top:-50%; right:-10%;
+    width:300px; height:300px;
+    background: radial-gradient(circle, rgba(0,212,255,0.06), transparent 70%);
+    pointer-events:none;
+  }
+  .batt-label { font-size:11px; letter-spacing:3px; color:var(--textdim); text-transform:uppercase; margin-bottom:6px; }
+  .batt-voltage { font-family:'Share Tech Mono',monospace; font-size:52px; color:var(--accent); font-weight:400; line-height:1; }
+  .batt-unit { font-size:20px; color:var(--dim); }
+
+  .soc-ring-wrap { text-align:center; }
+  .soc-ring {
+    position:relative; display:inline-block;
+    width:120px; height:120px;
+  }
+  .soc-ring svg { transform:rotate(-90deg); }
+  .soc-ring-bg { fill:none; stroke:var(--bg3); stroke-width:10; }
+  .soc-ring-fill { fill:none; stroke-width:10; stroke-linecap:round; transition:stroke-dashoffset 1s ease, stroke 0.5s; }
+  .soc-center {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+  }
+  .soc-pct { font-family:'Share Tech Mono',monospace; font-size:28px; color:var(--text); }
+  .soc-lbl { font-size:10px; letter-spacing:2px; color:var(--textdim); }
+
+  .batt-meta { display:flex; gap:24px; margin-top:12px; flex-wrap:wrap; }
+  .batt-meta-item { }
+  .batt-meta-item .val { font-family:'Share Tech Mono',monospace; font-size:18px; color:var(--text); }
+  .batt-meta-item .lbl { font-size:10px; letter-spacing:2px; color:var(--textdim); }
+
+  /* ── FLOOR CARDS ── */
+  .floors-grid {
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap:16px;
+    margin-bottom:20px;
+  }
+  .floor-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius:14px;
+    padding:20px;
+    position:relative;
+    overflow:hidden;
+    transition: border-color 0.3s;
+  }
+  .floor-card:hover { border-color: rgba(0,212,255,0.3); }
+  .floor-card::after {
+    content:'';
+    position:absolute;
+    top:0; left:0; right:0;
+    height:3px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+  }
+  .floor-card.offline::after { background: linear-gradient(90deg, var(--red), transparent); }
+
+  .floor-header {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:16px;
+  }
+  .floor-name { font-size:18px; font-weight:700; letter-spacing:2px; text-transform:uppercase; }
+  .floor-link {
+    font-family:'Share Tech Mono',monospace; font-size:10px;
+    padding:3px 8px; border-radius:4px;
+    border:1px solid var(--border);
+    color:var(--textdim);
+  }
+  .floor-link.esp  { border-color:var(--accent); color:var(--accent); }
+  .floor-link.mqtt { border-color:var(--yellow); color:var(--yellow); }
+  .floor-link.both { border-color:var(--green);  color:var(--green);  }
+  .floor-link.offline { border-color:var(--red); color:var(--red); }
+
+  /* Relay grid */
+  .relay-grid {
+    display:grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap:8px;
+    margin-bottom:16px;
+  }
+  .relay-item {
+    background: var(--bg3);
+    border-radius:8px;
+    padding:10px 12px;
+    border: 1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between;
+    transition: all 0.3s;
+  }
+  .relay-item.on {
+    border-color:rgba(0,255,136,0.4);
+    background: rgba(0,255,136,0.06);
+  }
+  .relay-name { font-size:12px; letter-spacing:1px; color:var(--textdim); }
+  .relay-pill {
+    font-family:'Share Tech Mono',monospace;
+    font-size:11px; font-weight:700;
+    padding:2px 8px; border-radius:12px;
+    background:rgba(255,51,85,0.15);
+    color:var(--red);
+    border:1px solid rgba(255,51,85,0.3);
+    transition:all 0.3s;
+  }
+  .relay-pill.on {
+    background:rgba(0,255,136,0.15);
+    color:var(--green);
+    border-color:rgba(0,255,136,0.3);
+  }
+
+  /* Power bar */
+  .power-section { margin-top:4px; }
+  .power-row {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:6px;
+  }
+  .power-lbl { font-size:11px; letter-spacing:1px; color:var(--textdim); }
+  .power-val { font-family:'Share Tech Mono',monospace; font-size:13px; color:var(--text); }
+  .power-bar-wrap { height:3px; background:var(--bg3); border-radius:2px; margin-bottom:10px; }
+  .power-bar-fill {
+    height:100%; border-radius:2px;
+    background:linear-gradient(90deg, var(--accent), var(--accent2));
+    transition:width 1s ease;
+  }
+
+  .floor-total {
+    display:flex; justify-content:space-between;
+    border-top:1px solid var(--border);
+    padding-top:12px; margin-top:8px;
+  }
+  .floor-total .lbl { font-size:11px; letter-spacing:2px; color:var(--textdim); }
+  .floor-total .val { font-family:'Share Tech Mono',monospace; font-size:16px; color:var(--accent2); }
+
+  /* ── SYSTEM STATUS BAR ── */
+  .status-bar {
+    background:var(--bg2);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:16px 20px;
+    display:flex; flex-wrap:wrap; gap:20px;
+    align-items:center;
+    margin-bottom:20px;
+  }
+  .stat-item { display:flex; align-items:center; gap:8px; }
+  .stat-icon { font-size:16px; }
+  .stat-lbl { font-size:10px; letter-spacing:2px; color:var(--textdim); }
+  .stat-val { font-family:'Share Tech Mono',monospace; font-size:14px; color:var(--text); }
+  .stat-val.good { color:var(--green); }
+  .stat-val.warn { color:var(--yellow); }
+  .stat-val.bad  { color:var(--red); }
+
+  /* ── TOTAL POWER ── */
+  .power-summary {
+    background: var(--bg2);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:20px;
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap:16px;
+    margin-bottom:20px;
+  }
+  .power-summary-item { text-align:center; }
+  .power-summary-item .big {
+    font-family:'Share Tech Mono',monospace;
+    font-size:32px; color:var(--accent2);
+    line-height:1.1;
+  }
+  .power-summary-item .sm { font-size:10px; letter-spacing:3px; color:var(--textdim); margin-top:4px; }
+
+  /* ── CONNECTION PANEL ── */
+  .conn-panel {
+    background:var(--bg2);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:20px;
+    margin-bottom:20px;
+  }
+  .conn-panel h3 { font-size:13px; letter-spacing:3px; color:var(--textdim); margin-bottom:16px; }
+  .conn-form { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+  .conn-form label { font-size:11px; letter-spacing:2px; color:var(--textdim); display:block; margin-bottom:4px; }
+  .conn-form input {
+    background:var(--bg3);
+    border:1px solid var(--border);
+    border-radius:6px;
+    padding:8px 12px;
+    color:var(--text);
+    font-family:'Share Tech Mono',monospace;
+    font-size:13px;
+    width:200px;
+    outline:none;
+  }
+  .conn-form input:focus { border-color:var(--accent); }
+  .btn {
+    background:var(--accent);
+    color:var(--bg);
+    border:none; border-radius:6px;
+    padding:8px 20px;
+    font-family:'Rajdhani',sans-serif;
+    font-size:14px; font-weight:700;
+    letter-spacing:1px;
+    cursor:pointer;
+    transition:all 0.2s;
+  }
+  .btn:hover { background:#33ddff; box-shadow:0 0 16px rgba(0,212,255,0.4); }
+  .btn.red { background:var(--red); }
+  .btn.red:hover { background:#ff5577; box-shadow:0 0 16px rgba(255,51,85,0.4); }
+
+  /* ── LAST UPDATE ── */
+  .last-update {
+    text-align:center;
+    font-family:'Share Tech Mono',monospace;
+    font-size:11px;
+    color:var(--textdim);
+    padding:12px;
+  }
+
+  /* ── RAIN/WEATHER BADGE ── */
+  .weather-badge {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:4px 10px; border-radius:20px;
+    font-size:11px; letter-spacing:1px;
+    border:1px solid var(--border);
+    background:var(--bg3);
+    color:var(--textdim);
+  }
+  .weather-badge.bad { border-color:rgba(0,212,255,0.4); color:var(--accent); background:rgba(0,212,255,0.06); }
+  .weather-badge.good{ border-color:rgba(0,255,136,0.4); color:var(--green);  background:rgba(0,255,136,0.06); }
+
+  /* offline overlay */
+  .offline-msg {
+    text-align:center; padding:40px 20px;
+    font-family:'Share Tech Mono',monospace;
+    color:var(--textdim); font-size:13px;
+    letter-spacing:2px;
+  }
+
+  @media(max-width:600px){
+    .topbar { padding:10px 14px; }
+    .main { padding:12px 14px; }
+    .batt-voltage { font-size:38px; }
+    .conn-form input { width:100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <div>
+      <div class="logo-text">NITEO</div>
+      <div class="logo-sub">BUILDING MANAGEMENT SYSTEM</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+    <div class="conn-status">
+      <div class="conn-dot" id="connDot"></div>
+      <span id="connLabel">DISCONNECTED</span>
+    </div>
+    <div class="time-display" id="clockDisplay">--:--:--</div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- CONNECTION PANEL -->
+  <div class="conn-panel" id="connPanel">
+    <h3>MQTT CONNECTION</h3>
+    <div class="conn-form">
+      <div>
+        <label>BROKER HOST</label>
+        <input type="text" id="brokerHost" value="broker.hivemq.com" />
+      </div>
+      <div>
+        <label>WEBSOCKET PORT</label>
+        <input type="text" id="brokerPort" value="8884" style="width:120px" />
+      </div>
+      <button class="btn" onclick="connectMQTT()">CONNECT</button>
+      <button class="btn red" onclick="disconnectMQTT()" id="disconnBtn" style="display:none">DISCONNECT</button>
+    </div>
+    <div style="margin-top:10px;font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--textdim)" id="connMsg">
+      Enter broker details and click CONNECT. Uses HiveMQ WebSocket (port 8884).
+    </div>
+  </div>
+
+  <!-- BATTERY HERO -->
+  <div class="battery-hero" id="battHero">
+    <div>
+      <div class="batt-label">MASTER BATTERY · 2ND FLOOR · 48V LiFePO4</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:16px;">
+        <div class="batt-voltage" id="battV">--.-</div>
+        <div class="batt-unit">VOLTS</div>
+      </div>
+      <div class="batt-meta">
+        <div class="batt-meta-item">
+          <div class="val" id="invStatus">--</div>
+          <div class="lbl">INVERTERS</div>
+        </div>
+        <div class="batt-meta-item">
+          <div class="val" id="weatherTemp">--°C</div>
+          <div class="lbl">TEMPERATURE</div>
+        </div>
+        <div class="batt-meta-item">
+          <div class="val" id="rainDays">-- days</div>
+          <div class="lbl">RAIN COUNT</div>
+        </div>
+        <div class="batt-meta-item">
+          <div class="weather-badge" id="weatherBadge">⛅ UNKNOWN</div>
+        </div>
+      </div>
+    </div>
+    <div class="soc-ring-wrap">
+      <div class="soc-ring">
+        <svg width="120" height="120" viewBox="0 0 120 120">
+          <circle class="soc-ring-bg" cx="60" cy="60" r="50"/>
+          <circle class="soc-ring-fill" id="socArc" cx="60" cy="60" r="50"
+            stroke-dasharray="314" stroke-dashoffset="314" stroke="var(--accent)"/>
+        </svg>
+        <div class="soc-center">
+          <div class="soc-pct" id="socPct">--%</div>
+          <div class="soc-lbl">SOC</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SYSTEM STATUS -->
+  <div class="status-bar" id="statusBar">
+    <div class="stat-item">
+      <span class="stat-icon">📡</span>
+      <div><div class="stat-lbl">MQTT</div><div class="stat-val" id="sMqtt">--</div></div>
+    </div>
+    <div class="stat-item">
+      <span class="stat-icon">🔗</span>
+      <div><div class="stat-lbl">ESP-NOW</div><div class="stat-val" id="sEsp">--</div></div>
+    </div>
+    <div class="stat-item">
+      <span class="stat-icon">🌐</span>
+      <div><div class="stat-lbl">WIFI</div><div class="stat-val" id="sWifi">--</div></div>
+    </div>
+    <div class="stat-item">
+      <span class="stat-icon">🕐</span>
+      <div><div class="stat-lbl">DEVICE TIME</div><div class="stat-val" id="sTime" style="font-size:12px">--</div></div>
+    </div>
+    <div class="stat-item">
+      <span class="stat-icon">⚠️</span>
+      <div><div class="stat-lbl">MODE</div><div class="stat-val" id="sMode">--</div></div>
+    </div>
+  </div>
+
+  <!-- TOTAL POWER -->
+  <div class="power-summary">
+    <div class="power-summary-item">
+      <div class="big" id="pTotal">-- W</div>
+      <div class="sm">TOTAL LOAD</div>
+    </div>
+    <div class="power-summary-item">
+      <div class="big" id="p2nd">-- W</div>
+      <div class="sm">2ND FLOOR</div>
+    </div>
+    <div class="power-summary-item">
+      <div class="big" id="p1st">-- W</div>
+      <div class="sm">1ST FLOOR</div>
+    </div>
+    <div class="power-summary-item">
+      <div class="big" id="pgnd">-- W</div>
+      <div class="sm">GROUND FLOOR</div>
+    </div>
+  </div>
+
+  <!-- FLOOR CARDS -->
+  <div class="floors-grid">
+
+    <!-- 2ND FLOOR -->
+    <div class="floor-card" id="card2nd">
+      <div class="floor-header">
+        <div class="floor-name">2ND FLOOR</div>
+        <div class="floor-link" id="link2nd">MASTER</div>
+      </div>
+      <div class="relay-grid">
+        <div class="relay-item" id="r2c"><span class="relay-name">CRITICAL</span><span class="relay-pill" id="r2cP">OFF</span></div>
+        <div class="relay-item" id="r2m"><span class="relay-name">AC MASTER</span><span class="relay-pill" id="r2mP">OFF</span></div>
+        <div class="relay-item" id="r2o"><span class="relay-name">AC OTHER</span><span class="relay-pill" id="r2oP">OFF</span></div>
+        <div class="relay-item" id="r2h"><span class="relay-name">HEATER</span><span class="relay-pill" id="r2hP">OFF</span></div>
+      </div>
+      <div class="power-section">
+        <div class="power-row"><span class="power-lbl">CRITICAL</span><span class="power-val" id="p2c">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="b2c" style="width:0%"></div></div>
+        <div class="power-row"><span class="power-lbl">AC MASTER</span><span class="power-val" id="p2m">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="b2m" style="width:0%"></div></div>
+        <div class="power-row"><span class="power-lbl">HEATER</span><span class="power-val" id="p2h">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="b2h" style="width:0%"></div></div>
+      </div>
+      <div class="floor-total">
+        <span class="lbl">FLOOR TOTAL</span>
+        <span class="val" id="t2nd">-- W</span>
+      </div>
+    </div>
+
+    <!-- 1ST FLOOR -->
+    <div class="floor-card offline" id="card1st">
+      <div class="floor-header">
+        <div class="floor-name">1ST FLOOR</div>
+        <div class="floor-link offline" id="link1st">OFFLINE</div>
+      </div>
+      <div class="relay-grid">
+        <div class="relay-item" id="r1c"><span class="relay-name">CRITICAL</span><span class="relay-pill" id="r1cP">OFF</span></div>
+        <div class="relay-item" id="r1o"><span class="relay-name">AC OTHER</span><span class="relay-pill" id="r1oP">OFF</span></div>
+        <div class="relay-item" id="r1h"><span class="relay-name">HEATER</span><span class="relay-pill" id="r1hP">OFF</span></div>
+        <div class="relay-item"><span class="relay-name">SOC</span><span class="relay-pill" id="soc1st" style="background:transparent;border-color:var(--accent);color:var(--accent)">--%</span></div>
+      </div>
+      <div class="power-section">
+        <div class="power-row"><span class="power-lbl">CRITICAL</span><span class="power-val" id="p1c">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="b1c" style="width:0%"></div></div>
+        <div class="power-row"><span class="power-lbl">AC OTHER</span><span class="power-val" id="p1o">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="b1o" style="width:0%"></div></div>
+        <div class="power-row"><span class="power-lbl">HEATER</span><span class="power-val" id="p1h">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="b1h" style="width:0%"></div></div>
+      </div>
+      <div class="floor-total">
+        <span class="lbl">FLOOR TOTAL</span>
+        <span class="val" id="t1st">-- W</span>
+      </div>
+    </div>
+
+    <!-- GROUND FLOOR -->
+    <div class="floor-card offline" id="cardGnd">
+      <div class="floor-header">
+        <div class="floor-name">GROUND FLOOR</div>
+        <div class="floor-link offline" id="linkGnd">OFFLINE</div>
+      </div>
+      <div class="relay-grid">
+        <div class="relay-item" id="rgc"><span class="relay-name">CRITICAL</span><span class="relay-pill" id="rgcP">OFF</span></div>
+        <div class="relay-item" id="rgo"><span class="relay-name">AC OTHER</span><span class="relay-pill" id="rgoP">OFF</span></div>
+        <div class="relay-item" id="rgk"><span class="relay-name">KITCHEN</span><span class="relay-pill" id="rgkP">OFF</span></div>
+        <div class="relay-item" id="rge"><span class="relay-name">EV CHARGER</span><span class="relay-pill" id="rgeP">OFF</span></div>
+      </div>
+      <div class="power-section">
+        <div class="power-row"><span class="power-lbl">CRITICAL</span><span class="power-val" id="pgc">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="bgc" style="width:0%"></div></div>
+        <div class="power-row"><span class="power-lbl">KITCHEN</span><span class="power-val" id="pgk">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="bgk" style="width:0%"></div></div>
+        <div class="power-row"><span class="power-lbl">EV CHARGER</span><span class="power-val" id="pge">-- W</span></div>
+        <div class="power-bar-wrap"><div class="power-bar-fill" id="bge" style="width:0%"></div></div>
+      </div>
+      <div class="floor-total">
+        <span class="lbl">FLOOR TOTAL</span>
+        <span class="val" id="tgnd">-- W</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="last-update" id="lastUpdate">AWAITING DATA...</div>
+
+</div><!-- /main -->
+
+<script>
+// ── MQTT CLIENT ────────────────────────────────────────────────
+let client = null;
+let data2nd = {}, data1st = {}, dataGnd = {};
+
+function connectMQTT() {
+  const host = document.getElementById('brokerHost').value.trim();
+  const port = parseInt(document.getElementById('brokerPort').value.trim());
+  const clientId = 'niteo_web_' + Math.random().toString(16).substr(2, 8);
+
+  setConnMsg('Connecting to ' + host + ':' + port + '...');
+
+  try {
+    client = new Paho.MQTT.Client(host, port, '/mqtt', clientId);
+    client.onConnectionLost = onConnectionLost;
+    client.onMessageArrived = onMessageArrived;
+    client.connect({
+      useSSL: true,
+      timeout: 10,
+      onSuccess: onConnect,
+      onFailure: onConnectFail
+    });
+  } catch(e) {
+    setConnMsg('Error: ' + e.message);
+  }
+}
+
+function disconnectMQTT() {
+  if (client && client.isConnected()) client.disconnect();
+  setOffline();
+}
+
+function onConnect() {
+  document.getElementById('connDot').classList.add('online');
+  document.getElementById('connLabel').textContent = 'CONNECTED';
+  document.getElementById('disconnBtn').style.display = 'inline-block';
+  setConnMsg('✓ Connected. Subscribing to NITEO topics...');
+
+  client.subscribe('niteo/2ndfloor/status');
+  client.subscribe('niteo/1stfloor/status');
+  client.subscribe('niteo/groundfloor/status');
+
+  setConnMsg('✓ Live — receiving data from all 3 floors');
+}
+
+function onConnectFail(e) {
+  setConnMsg('✗ Connection failed: ' + (e.errorMessage || 'Check broker/port'));
+}
+
+function onConnectionLost(r) {
+  if (r.errorCode !== 0) {
+    setOffline();
+    setConnMsg('Connection lost: ' + r.errorMessage + ' — refresh to reconnect');
+  }
+}
+
+function setOffline() {
+  document.getElementById('connDot').classList.remove('online');
+  document.getElementById('connLabel').textContent = 'DISCONNECTED';
+  document.getElementById('disconnBtn').style.display = 'none';
+}
+
+function setConnMsg(msg) {
+  document.getElementById('connMsg').textContent = msg;
+}
+
+// ── MESSAGE HANDLER ────────────────────────────────────────────
+function onMessageArrived(msg) {
+  try {
+    const d = JSON.parse(msg.payloadString);
+    const topic = msg.destinationName;
+    if (topic === 'niteo/2ndfloor/status')  { data2nd = d; update2nd(d); }
+    if (topic === 'niteo/1stfloor/status')  { data1st = d; update1st(d); }
+    if (topic === 'niteo/groundfloor/status'){ dataGnd = d; updateGnd(d); }
+    updateLastTime();
+  } catch(e) {}
+}
+
+// ── UPDATE FUNCTIONS ───────────────────────────────────────────
+function update2nd(d) {
+  // Battery hero
+  set('battV',   fv(d.voltage) + ' V');
+  setSoc(d.soc);
+  set('invStatus', (d.inv1 && d.inv2) ? 'BOTH ON' : d.inv1 ? 'INV1 ONLY' : d.inv2 ? 'INV2 ONLY' : 'NONE');
+  set('weatherTemp', typeof d.weatherTemp === 'number' ? d.weatherTemp.toFixed(1)+'°C' : '--°C');
+  set('rainDays', (d.rainDays || 0) + ' days');
+
+  const wb = document.getElementById('weatherBadge');
+  if (d.badWeather) { wb.textContent = '🌧 BAD WEATHER'; wb.className='weather-badge bad'; }
+  else              { wb.textContent = '☀ GOOD';         wb.className='weather-badge good'; }
+
+  // Relays
+  setRelay('r2c','r2cP', d.voltage > 0 ? (d.socCritOff !== undefined) : false); // use relay state from data
+  // 2nd floor uses its own relay states
+  // These come from 2nd floor's own publishMQTT which doesn't send relay states
+  // We infer from power > 0 or use socCritOff presence as proxy
+  // Actually show power-based state
+  setRelayByPower('r2c','r2cP', d.totalPower, 'p2c' in data2nd ? data2nd.p2c : 0);
+
+  // Power
+  const maxP = 3000;
+  setPower('p2c','b2c', data2nd.p2c || 0, maxP);
+  setPower('p2m','b2m', data2nd.p2m || 0, maxP);
+  setPower('p2h','b2h', data2nd.p2h || 0, maxP);
+  set('t2nd', fw(d.totalPower));
+  set('p2nd', fw(d.totalPower));
+
+  // System status
+  set('sMqtt',  '--');  // 2nd floor itself is the mqtt source
+  set('sEsp',   '--');
+  set('sWifi',  'ONLINE', 'good');
+  set('sTime',  '--');
+  set('sMode',  'NORMAL', 'good');
+
+  updateTotals();
+}
+
+function update1st(d) {
+  document.getElementById('card1st').classList.remove('offline');
+  setLinkBadge('link1st', d.floor === 1 ? 'ESP-NOW' : 'MQTT');
+
+  setRelayEl('r1c','r1cP', d.relayCrit);
+  setRelayEl('r1o','r1oP', d.relayACO);
+  setRelayEl('r1h','r1hP', d.relayHeat);
+  set('soc1st', typeof d.soc === 'number' ? d.soc.toFixed(0)+'%' : '--%');
+
+  const maxP = 3000;
+  setPower('p1c','b1c', d.powerCrit||0, maxP);
+  setPower('p1o','b1o', d.powerACO||0,  maxP);
+  setPower('p1h','b1h', d.powerHeat||0, maxP);
+  set('t1st', fw(d.totalPower));
+
+  // Update battery hero from 1st floor if it has local battery and 2nd has none
+  updateTotals();
+}
+
+function updateGnd(d) {
+  document.getElementById('cardGnd').classList.remove('offline');
+  setLinkBadge('linkGnd', d.floor === 0 ? 'ESP-NOW' : 'MQTT');
+
+  setRelayEl('rgc','rgcP', d.relayCrit);
+  setRelayEl('rgo','rgoP', d.relayACO);
+  setRelayEl('rgk','rgkP', d.relayKit);
+  setRelayEl('rge','rgeP', d.relayEV);
+
+  const maxP = 3000;
+  setPower('pgc','bgc', d.powerCrit||0, maxP);
+  setPower('pgk','bgk', d.powerKit||0,  maxP);
+  setPower('pge','bge', d.powerEV||0,   maxP);
+  set('tgnd', fw(d.totalPower));
+
+  updateTotals();
+}
+
+function updateTotals() {
+  const t2 = data2nd.totalPower || 0;
+  const t1 = data1st.totalPower || 0;
+  const tg = dataGnd.totalPower || 0;
+  set('pTotal', fw(t2 + t1 + tg));
+  set('p2nd', fw(t2));
+  set('p1st', fw(t1));
+  set('pgnd', fw(tg));
+}
+
+// ── HELPERS ────────────────────────────────────────────────────
+function set(id, val, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = val;
+  if (cls) el.className = 'stat-val ' + cls;
+}
+
+function fv(v) { return typeof v === 'number' ? v.toFixed(1) : '--.-'; }
+function fw(w) { return typeof w === 'number' ? Math.round(w) + ' W' : '-- W'; }
+
+function setSoc(pct) {
+  if (typeof pct !== 'number') return;
+  const p = Math.max(0, Math.min(100, pct));
+  set('socPct', Math.round(p) + '%');
+  const arc = document.getElementById('socArc');
+  const offset = 314 * (1 - p/100);
+  arc.style.strokeDashoffset = offset;
+  arc.style.stroke = p > 60 ? 'var(--green)' : p > 30 ? 'var(--yellow)' : 'var(--red)';
+}
+
+function setRelayEl(itemId, pillId, state) {
+  const item = document.getElementById(itemId);
+  const pill = document.getElementById(pillId);
+  if (!item || !pill) return;
+  if (state) {
+    item.classList.add('on');
+    pill.classList.add('on');
+    pill.textContent = 'ON';
+  } else {
+    item.classList.remove('on');
+    pill.classList.remove('on');
+    pill.textContent = 'OFF';
+  }
+}
+
+function setRelayByPower(itemId, pillId, total, power) {
+  setRelayEl(itemId, pillId, power > 5);
+}
+
+function setPower(valId, barId, watts, maxW) {
+  const el = document.getElementById(valId);
+  const bar = document.getElementById(barId);
+  if (el)  el.textContent = Math.round(watts) + ' W';
+  if (bar) bar.style.width = Math.min(100, (watts / maxW) * 100) + '%';
+}
+
+function setLinkBadge(id, mode) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = mode;
+  el.className = 'floor-link ' + mode.toLowerCase().replace('-','');
+}
+
+function updateLastTime() {
+  const now = new Date();
+  const ts = now.toLocaleTimeString();
+  document.getElementById('lastUpdate').textContent = 'LAST UPDATE: ' + ts;
+}
+
+// ── CLOCK ─────────────────────────────────────────────────────
+setInterval(() => {
+  const now = new Date();
+  document.getElementById('clockDisplay').textContent =
+    now.toLocaleTimeString('en-GB') + '  ' +
+    now.toLocaleDateString('en-GB');
+}, 1000);
+
+// 2nd floor relay states come from its own publishMQTT
+// which includes relay fields — update those properly
+function onMessageArrived(msg) {
+  try {
+    const d = JSON.parse(msg.payloadString);
+    const topic = msg.destinationName;
+    if (topic === 'niteo/2ndfloor/status') {
+      data2nd = d;
+      // Battery
+      set('battV', fv(d.voltage));
+      setSoc(d.soc);
+      set('invStatus', d.inv1 && d.inv2 ? 'BOTH ON' : d.inv1 ? 'INV1' : d.inv2 ? 'INV2' : 'NONE');
+      if (typeof d.weatherTemp==='number') set('weatherTemp', d.weatherTemp.toFixed(1)+'°C');
+      set('rainDays', (d.rainDays||0)+' days');
+      const wb = document.getElementById('weatherBadge');
+      if (d.badWeather) { wb.textContent='🌧 BAD WEATHER'; wb.className='weather-badge bad'; }
+      else              { wb.textContent='☀ GOOD';         wb.className='weather-badge good'; }
+      // 2nd floor doesn't publish relay states in its MQTT
+      // they come via ESP-NOW to other floors only
+      // show total power
+      set('t2nd', fw(d.totalPower));
+      set('p2nd', fw(d.totalPower));
+      updateTotals();
+    }
+    if (topic === 'niteo/1stfloor/status') {
+      data1st = d;
+      update1st(d);
+    }
+    if (topic === 'niteo/groundfloor/status') {
+      dataGnd = d;
+      updateGnd(d);
+    }
+    updateLastTime();
+  } catch(e) {}
+}
+</script>
+</body>
+</html>
